@@ -1,0 +1,224 @@
+# Schnitt-Starter: Pausen raus, Untertitel drauf
+
+Von Paul (Effekt 1/100). Eine Datei, die du deiner KI gibst. Sie baut dir daraus ein kleines Programm,
+das dein Talking-Head-Video schneidet: Pausen, Ähms und doppelte Anläufe raus, Untertitel Wort für Wort
+drauf, auf Wunsch ein Titel oben. Läuft komplett auf deinem Rechner, kostenlos.
+
+## Für dich: so benutzt du die Datei
+
+**Du brauchst:** einen Mac oder Windows-PC und einen KI-Assistenten, der auf deinem Rechner arbeiten
+darf, zum Beispiel Claude Code (in der Claude-App der Tab „Code“). In einem normalen Chatfenster geht
+es nicht, weil dort niemand dein Video schneiden kann.
+
+1. Leg einen neuen Ordner an, zum Beispiel `Schnitt` auf dem Schreibtisch.
+2. Leg diese Datei und dein Video hinein. Hochkant gefilmt, eine Person, die spricht.
+3. Öffne den Ordner in Claude Code und schreib: **„Lies SCHNITT-STARTER.md und schneid mein Video.“**
+
+Beim ersten Mal richtet die KI ein paar Dinge ein, das dauert etwa 5 bis 10 Minuten, dazu lädt sie
+einmal ein Sprachmodell (je nach Rechner 0,5 bis 1,5 GB). Danach braucht ein Video ein, zwei Minuten. Fehlt etwas auf
+deinem Rechner, sagt sie dir genau, was du eintippen musst.
+
+**Tipp beim Filmen:** Wenn du dich versprichst, fang den Satz einfach noch mal von vorn an. Der doppelte
+Anlauf fliegt raus, der zweite bleibt.
+
+---
+
+## Für die KI: Auftrag
+
+Du baust für eine Person ohne Programmierkenntnisse ein wiederverwendbares Skript `schnitt.py` in
+diesem Ordner und schneidest damit ihr Video. Erkläre jeden Schritt in einem kurzen Satz ohne
+Fachwörter. Stelle Rückfragen nur dort, wo diese Anleitung es sagt. Alle Zahlen unten stehen als
+Einstellungen oben in `schnitt.py`, damit die Person sie später ändern lassen kann.
+
+### Regeln
+
+- Das Originalvideo wird nie verändert oder gelöscht. Alles Neue kommt nach `ausgabe/<Videoname ohne
+  Endung>/`. Wo unten `ausgabe/` steht, ist immer dieser Unterordner gemeint.
+- Installiert wird in diesen Ordner: eine virtuelle Umgebung `.venv`, Schriften in `schriften/`.
+  Ausnahme: Das Sprachmodell legt `faster-whisper` im Benutzer-Cache ab (`~/.cache/huggingface`). Sag
+  der Person das einmal.
+- Fehlt ein Programm, das systemweit nötig ist (ffmpeg, Python), gib der Person die passende Zeile aus
+  der Tabelle unten, erkläre, wo sie sie eintippt, und warte.
+
+### Schritt 0: Rechner einrichten
+
+1. Betriebssystem feststellen.
+2. `ffmpeg` vorhanden und mit libass gebaut? Prüfen mit `ffmpeg -hide_banner -filters`, darin müssen
+   ` ass ` und ` subtitles ` stehen. Version notieren (`ffmpeg -version`).
+3. **Python 3.10, 3.11 oder 3.12** suchen (`python3.12`, `python3.11`, unter Windows `py -3.12`).
+   Neuere Versionen (3.13 und höher) nicht verwenden: Für den Spracherkenner fehlen dort oft fertige
+   Pakete. Gibt es keine passende Version, Zeile aus der Tabelle ausgeben.
+
+| | Mac (Terminal) | Windows (PowerShell) |
+|---|---|---|
+| Homebrew (nur Mac, falls `brew` fehlt) | Befehl von brew.sh | entfällt |
+| ffmpeg | `brew install ffmpeg` | `winget install --id Gyan.FFmpeg -e` |
+| Python 3.12 | `brew install python@3.12` | `winget install --id Python.Python.3.12 -e` |
+
+Unter Windows nach dem Installieren die KI-App komplett schließen und neu öffnen, sonst findet sie
+die neuen Programme nicht.
+
+4. Umgebung gezielt mit dieser Version anlegen (`python3.12 -m venv .venv`, Windows `py -3.12 -m venv .venv`)
+   und `faster-whisper` und `numpy` hineininstallieren. Kein `torch`, kein `openai-whisper`.
+5. Schrift **Archivo Black** (frei, SIL Open Font License) nach `schriften/` laden:
+   `https://github.com/google/fonts/raw/main/ofl/archivoblack/ArchivoBlack-Regular.ttf`.
+   Klappt der Download nicht, „Arial Black“ verwenden.
+
+### Schritt 1: Video finden und prüfen
+
+- Im Ordner das Video suchen (`.mov`, `.mp4`, `.m4v`). Liegen mehrere da, fragen, welches. Liegt keins da,
+  freundlich sagen, dass das Video noch in den Ordner muss, und warten.
+- Mit `ffprobe` lesen: Länge, Auflösung, Bildrate, Drehung, Farbbereich (`color_range`) und
+  Farbkurve (`color_transfer`). Ziel ist immer 1080 × 1920 bei 30 Bildern pro Sekunde. Querformat:
+  fragen, ob mittig auf Hochformat zugeschnitten werden soll.
+- **iPhone-HDR:** Steht bei `color_transfer` `arib-std-b67` (HLG) oder `smpte2084`, muss das Bild auf
+  normales Bild (SDR) umgerechnet werden, sonst wirkt das Ergebnis blass. Das geht mit `zscale` und
+  `tonemap`, aber nur, wenn ffmpeg `zscale` kennt (in `ffmpeg -filters` nachsehen, dem Homebrew-ffmpeg
+  fehlt es oft). Fehlt es: der Person sagen, dass das Ergebnis blasser wird, und für die nächsten Videos
+  am iPhone unter Einstellungen › Kamera › Video aufnehmen „HDR-Video“ ausschalten.
+- **Spiegelung:** Ein Standbild ziehen und selbst ansehen. Steht Schrift im Bild spiegelverkehrt
+  (Poster, Shirt-Aufdruck), war es die Frontkamera: dann das Bild waagerecht spiegeln (`hflip`). Ist
+  keine Schrift zu sehen, nicht spiegeln. Entschieden wird bei `analyse`, gebraucht erst bei `schneiden`:
+  beides als Schalter an `schneiden` (`--spiegeln`, `--titel "…"`), damit es beim nächsten Video ohne
+  Umbau geht.
+- Einmal fragen: **„Soll oben in den ersten Sekunden ein Titel stehen? Wenn ja, welcher?“** Keine
+  Antwort heißt: kein Titel.
+
+### Schritt 2: Mitschreiben, was gesagt wird
+
+- **Ton mit ffmpeg einlesen, nicht mit dem eingebauten Leser von faster-whisper:** `ffmpeg -i video
+  -ac 1 -ar 16000 -f f32le -` und das Ergebnis als `numpy`-Feld (`float32`) an `transcribe()` geben.
+  Grund: Die mitinstallierte Bibliothek `av` passt nicht immer zur Version von faster-whisper, dann
+  bricht das Einlesen mit einem `TypeError` ab.
+- Modell: `medium` (rund 1,5 GB) auf einem Mac mit Apple-Chip oder einem Rechner mit 16 GB
+  Arbeitsspeicher und mehr, sonst `small` (rund 500 MB). `small` verschreibt sich bei Namen und
+  Sportarten öfter, und jeder Fehler steht später sichtbar im Untertitel.
+- `language="de"` (bei anderer Sprache die passende), `word_timestamps=True`, `vad_filter=False`,
+  `initial_prompt="Ähm, äh, also, ja."`. Ohne diesen Hinweis lässt der Spracherkenner Füllwörter oft
+  stillschweigend weg, dann kann man sie nicht rausschneiden.
+- Ergebnis als `ausgabe/woerter.json` speichern: jedes Wort mit Start, Ende, Text.
+- **Wichtig:** Die Wortzeiten des Spracherkenners sind an den Rändern ungenau. Er rechnet Stille oft dem
+  Wort davor oder danach zu (ein Wort „dauert“ dann 1,5 s), und das erste Wort steht gern bei 0,0 s,
+  obwohl erst später gesprochen wird. **Pausen deshalb nie an Wortlücken messen, sondern am Ton**
+  (Schritt 3).
+
+### Schritt 3: Entscheiden, was bleibt
+
+`schnitt.py` hat drei Befehle, dazwischen entscheidest du (die KI):
+
+- `schnitt.py analyse <video>`: Schritt 1 (Prüfen, Spiegeln), Schritt 2 und die Sprechstücke unten.
+- Du liest die Sprechstücke und schreibst `raus.json` (Punkt 4 unten).
+- `schnitt.py schneiden <video>`: Schritt 3 ab Punkt 5, Schritt 4 und 5.
+- `schnitt.py pruefen <video>`: Schritt 6.
+
+Alles landet in `ausgabe/<Videoname ohne Endung>/`, damit ein zweites Video das erste nicht überschreibt.
+Sagt die Person später „schneid das nächste Video“, läuft genau diese Folge.
+
+1. **Stille am Ton finden:** ffmpeg `silencedetect` mit `noise=-35dB` und `d=0.3` auf die Tonspur. Alles
+   zwischen zwei Stillen ist ein **Sprechstück**. Ein Stück wird nur behalten, wenn mindestens ein Wort aus
+   `woerter.json` mit seiner Mitte darin liegt (sonst war es Atmen oder Rascheln).
+2. **Wortzeiten auf die Sprechstücke beschneiden:** Kein Wort beginnt vor dem Anfang oder endet nach dem
+   Ende seines Stücks. Liegt ein Wort ganz in einer Stille, gehört es zum nächsten Stück, wenn das
+   höchstens 0,6 s entfernt ist, sonst zum vorigen. Es wird an den Rand dieses Stücks gesetzt und teilt
+   sich die Zeit mit dem Nachbarwort, statt aus den Untertiteln zu verschwinden. Überlappt ein Wort zwei
+   Stücke oder ein Stück und eine Stille, gehört es zum Stück mit der größten Überlappung. Diese bereinigten
+   Zeiten gelten für alles Weitere, auch für die Untertitel.
+3. **Sprechstücke als Liste ausgeben**, nummeriert, mit Zeit und Text, als `ausgabe/stuecke.json` und
+   lesbar im Chat.
+4. **Doppelte Anläufe: Das entscheidest du selbst, nicht eine feste Regel.** Lies die Liste wie ein
+   Cutter. Raus kommt:
+   - ein Stück, das kurz danach (bis etwa 30 Sekunden später) noch einmal sauberer gesagt wird. Es bleibt
+     immer der **spätere** Anlauf. Lag zwischen den beiden Anläufen noch ein Stück, das zum verworfenen
+     Anlauf gehört, fliegt es mit raus.
+   - ein abgebrochener Halbsatz, der ins Leere läuft und nicht weitergeführt wird.
+   - eine Wiederholung innerhalb eines Stücks („weil ich einfach, weil ich einfach Spaß habe“), wenn sie
+     in der Abschrift steht: dann nur diese Wörter, nicht das ganze Stück. Oft schreibt der
+     Spracherkenner die Wiederholung gar nicht mit, dann bleibt sie hörbar.
+   Im Zweifel bleibt das Stück drin. Ein Stück zwischen zwei Anläufen fliegt nur mit raus, wenn sein
+   Gedanke im späteren Anlauf noch einmal vorkommt. Schreib die Entscheidung nach `ausgabe/raus.json`:
+   `{"stuecke": [5, 6], "woerter": [[von, bis]], "gruende": {"5": "…"}}` (Wortbereiche als Nummern aus
+   `woerter.json`), und sag der Person in einem Satz pro Stück, was rausfliegt und warum.
+   Fällt dadurch ein Gedanke weg, der nirgends sonst vorkommt, sag das ausdrücklich dazu.
+5. **Füllwörter raus**, egal wie kurz die Lücke drumherum ist: Wörter, die nach dem Entfernen von
+   Satzzeichen genau eines davon sind: äh, ähm, öhm, öh, hm, hmm, mhm, uh, uhm. **Nicht** „um“, „so“,
+   „ja“, „also“: Das sind im Deutschen echte Wörter. Ehrlich bleiben: Der Spracherkenner schreibt viele
+   Ähms gar nicht erst mit, die bleiben dann hörbar.
+6. **Luft lassen:** vor jedem behaltenen Stück 0,08 s, danach 0,12 s, aber nie in ein entferntes Stück
+   oder Wort hinein. Überlappen sich Stücke dadurch, zusammenlegen.
+7. **Auf das Bildraster legen:** Jede Schnittzeit auf ein Vielfaches von 1/30 s runden. Sonst laufen Bild
+   und Ton über viele Schnitte auseinander.
+8. Abschnitte kürzer als 0,25 s weglassen. Liste als `ausgabe/schnitte.json` speichern.
+
+### Schritt 4: Schneiden
+
+- Je Abschnitt `trim` und `atrim`, dann `concat`. Dazu Spiegeln und HDR aus Schritt 1, Bild auf
+  1080 × 1920 und 30 fps.
+- An jedem Schnitt im Ton 10 ms ein- und ausblenden (`afade`), sonst knackt es.
+- **Bei vielen Abschnitten den Filtergraphen in eine Datei schreiben.** ffmpeg ab Version 7 liest sie mit
+  `-/filter_complex datei`, ältere Versionen mit `-filter_complex_script datei`.
+- **Farbbereich:** Handyvideos kommen oft im Vollbereich (`yuvj420p`, `pc`). `-pix_fmt yuv420p` allein
+  reicht dann nicht, zusätzlich `scale=out_range=tv` in den Filter.
+- Ergebnis zuerst ohne Untertitel als `ausgabe/geschnitten.mp4`, verlustarm kodiert (`crf 12`), weil es
+  beim Einbrennen noch einmal kodiert wird.
+
+### Schritt 5: Untertitel
+
+- Die Zeiten jedes behaltenen Worts auf die neue, kürzere Zeitachse umrechnen.
+- **Korrekturlesen, das kannst nur du:** Lies alle Untertitel-Wörter einmal durch und verbessere
+  offensichtliche Erkennungsfehler in der Schreibweise („Schrelig“, „Paddl“, „Follow -on -Views“), ohne
+  Zeiten zu ändern. Bindestriche oder Leerzeichen am Wortanfang entfernen. Die Korrekturen stehen in
+  `ausgabe/korrekturen.json` (Wortnummer zu neuem Text), `schnitt.py` liest sie beim Schneiden. Zeig der
+  Person die Liste. Weißt du nicht, was gemeint ist, lass das Stück einzeln noch einmal erkennen oder frag,
+  statt zu raten.
+- Wörter zu Gruppen von **höchstens 3 Wörtern** und höchstens 20 Zeichen zusammenfassen. Eine neue Gruppe
+  beginnt auch nach einem Satzzeichen oder an einem Schnitt.
+- ASS-Untertiteldatei `ausgabe/untertitel.ass`, `PlayResX=1080`, `PlayResY=1920`:
+  - Schrift Archivo Black, Größe 84, alles in Großbuchstaben, weiß, schwarzer Rand 6, kein Kasten.
+  - **Auf Brusthöhe, nicht auf dem Gesicht:** mittig, Mitte der Zeile bei 1390 Pixel von oben
+    (`\an5\pos(540,1430)`). Tiefer als 1500 nicht: Darunter liegen bei Instagram Text und Knöpfe.
+  - **Das gerade gesprochene Wort ist gelb** (`&H00FFFF&` in ASS-Schreibweise), die anderen der Gruppe
+    weiß. Pro Wort ein Ereignis, das die ganze Gruppe zeigt und nur dieses Wort einfärbt. Zwischen zwei
+    Wörtern derselben Gruppe bleibt die Gruppe stehen, das letzte Wort einer Gruppe noch 0,15 s länger,
+    aber nie über den Start der nächsten Gruppe hinaus.
+- **Titel**, falls gewünscht: die ersten 2,5 Sekunden, Größe 96, weiß mit Rand 6, Oberkante bei
+  330 Pixel (`\an8\pos(540,330)`), Schreibweise wie eingegeben. Länger als 18 Zeichen: auf zwei Zeilen
+  etwa gleicher Länge teilen, an einer Wortgrenze. Erst Sonderzeichen für ASS schützen, dann den
+  Zeilenumbruch `\N` einsetzen, sonst wird aus dem Umbruch ein „N“ im Text.
+- Einbrennen mit dem ffmpeg-Filter `subtitles` und `fontsdir=schriften`. Kodierung: H.264, `crf 18`,
+  `yuv420p`, Ton AAC 192 kbit/s, `-movflags +faststart`. Ergebnis: `ausgabe/fertig.mp4`.
+
+### Schritt 6: Selbst prüfen, bevor du fertig meldest
+
+1. Länge vorher und nachher, Anzahl der Schnitte, entfernte Füllwörter und Anläufe.
+   **Pausen nachmessen:** `silencedetect` (`-35dB`, `d=0.4`) auf `fertig.mp4`. Bleiben Stillen über
+   0,4 s, hat Schritt 3 sie übersehen: Schwelle in 3-dB-Schritten anpassen (lautes Zimmer: höher, etwa
+   `-30dB`; leises Mikro: tiefer, etwa `-40dB`) und neu schneiden. Für Anfang und Ende ein zweiter Lauf
+   mit `d=0.2`: Dort darf keine Stille über 0,2 s stehen.
+2. Drei Standbilder aus `fertig.mp4` ziehen (nach 1 s, in der Mitte, kurz vor Schluss) und ansehen:
+   Ist der Untertitel lesbar, vollständig im Bild, **nicht auf Mund oder Kinn**? Liegt er auf dem
+   Gesicht oder an der Kinnkante, die Höhe in Schritten von 40 Pixel nach unten setzen, höchstens bis
+   1500. Ist Schrift im
+   Hintergrund lesbar herum?
+3. Wörter an den Schnitten prüfen: `fertig.mp4` noch einmal abschreiben und nur die Wörter vergleichen,
+   die in `woerter.json` höchstens 0,5 s von einer Schnittstelle entfernt liegen. Fehlt dort ein
+   behaltenes Wort, wurde zu knapp geschnitten: Luft vergrößern. Vor dem Vergleich beide Seiten
+   vereinheitlichen: klein, ohne Satzzeichen, Zusammenziehungen ausschreiben („geht's“ zu „geht es“,
+   „mach's“ zu „mach es“) und ein End-e weglassen („habe“ wie „hab“, „mache“ wie „mach“). Abweichungen
+   weiter weg von den Schnitten sind Erkennungsfehler der zweiten Abschrift und kein Schnittfehler.
+   **Findet die zweite Abschrift Wörter, die in `woerter.json` fehlen** (ein „äh“, ein doppelter Anlauf
+   mitten im Satz), sag der Person, an welcher Stelle sie noch hörbar sind. Schneiden lassen sie sich
+   nur, wenn du sie in die Wortliste aufnimmst und neu schneidest.
+4. Erst dann der Person melden: wo das Video liegt, wie viel kürzer es ist, welche Anläufe rausflogen,
+   und dass sie es mit **„schneid das nächste Video“** jederzeit wieder benutzen kann.
+
+### Wenn die Person nachbessern will
+
+- „Schnitte zu hart“ oder „Wörter abgeschnitten“: kürzeste Stille in `silencedetect` von `d=0.3` auf
+  `d=0.5`, Luft auf 0,12 und 0,18 s.
+- „Zu viel rausgeschnitten“: Anläufe zurückholen und in Zukunft nur Stücke entfernen, die wirklich
+  wörtlich neu angefangen werden.
+- „Da fehlt ein Satz“: In der Liste der entfernten Anläufe nachsehen und diesen Anlauf zurückholen.
+- „Untertitel zu groß“ oder „zu klein“: Schriftgröße in Schritten von 8 ändern.
+- „Untertitel woanders hin“: nur die Höhe ändern, zwischen 1100 und 1500.
+- „Andere Farbe“: nur die Farbe des gesprochenen Worts ändern.
+- Jede Änderung oben in `schnitt.py` speichern, damit sie beim nächsten Video bleibt.
